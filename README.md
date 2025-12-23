@@ -2,7 +2,7 @@
 Развертывание сервера 1С на Ubuntu
 
 # Для запуска скрипта
-chmod +x 1c.sh
+sudo chmod +x ./1c.sh
 
 bash 1c.sh
 
