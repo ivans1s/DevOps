@@ -5,8 +5,8 @@ set -e
 DOWNLOAD_URL="https://f1.atoldriver.ru/1c/latest.zip"
 WORKDIR="/opt/install-1c"
 LOGFILE="/var/log/1c_install.log"
-ARCHIVE_STORAGE="/opt/1c-archives"
-PACKAGE_STORAGE="/opt/1c-packages"
+ARCHIVE_STORAGE="/opt/1c-archives"  # Папка для хранения архивов
+PACKAGE_STORAGE="/opt/1c-packages"  # Папка для хранения распакованных пакетов
 
 # === Логирование ===
 mkdir -p "$(dirname "$LOGFILE")"
@@ -44,7 +44,7 @@ echo "Хранилище архивов: $ARCHIVE_STORAGE"
 echo "Хранилище пакетов: $PACKAGE_STORAGE"
 echo
 
-# === Создание папок для хранения ===
+# === Создание папок для хранения (всегда) ===
 echo "Создаю папки для хранения..."
 sudo mkdir -p "$ARCHIVE_STORAGE" "$PACKAGE_STORAGE"
 sudo chown -R $USER:$USER "$ARCHIVE_STORAGE" "$PACKAGE_STORAGE"
@@ -65,16 +65,19 @@ fi
 if [ "$IS_FIRST_INSTALL" = true ] || [ "$FORCE_SETUP" = true ]; then
     echo "Выполняю первоначальную настройку системы..."
     
+    # === Обновление системы ===
     echo "Обновление списка пакетов..."
     sudo apt-get update
     echo "Обновление установленных пакетов..."
     sudo apt-get upgrade -y
 
+    # === Установка локали ===
     echo "Установка локалей..."
     sudo apt-get install -y locales
     sudo locale-gen en_US.UTF-8 ru_RU.UTF-8
     sudo update-locale LANG=ru_RU.UTF-8
 
+    # === Настройка часового пояса ===
     echo "Настройка часового пояса..."
     CURRENT_TZ=$(timedatectl show -p Timezone --value)
 
@@ -115,8 +118,10 @@ if [ "$IS_FIRST_INSTALL" = true ] || [ "$FORCE_SETUP" = true ]; then
     echo "Часовой пояс установлен: $(timedatectl show -p Timezone --value)"
     echo
 
+    # === Предотвращаем EULA popup ===
     echo msttcorefonts msttcorefonts/accepted-mscorefonts-eula select true | sudo debconf-set-selections
 
+    # === Установка зависимостей ===
     echo "Установка зависимостей..."
     sudo apt-get install -y ttf-mscorefonts-installer imagemagick unixodbc libgsf-bin t1utils unzip wget
 
@@ -134,6 +139,7 @@ echo "Скачиваю последнюю версию 1С..."
 ARCHIVE_NAME="1c_server_$(date +%Y%m%d_%H%M%S).zip"
 ARCHIVE_PATH="$ARCHIVE_STORAGE/$ARCHIVE_NAME"
 
+# Проверяем наличие wget с поддержкой прогресса
 if wget --help | grep -q "show-progress"; then
     echo "Скачивание архива (с прогресс-баром)..."
     wget --show-progress -O "$ARCHIVE_PATH" "$DOWNLOAD_URL"
@@ -142,6 +148,7 @@ else
     wget -O "$ARCHIVE_PATH" "$DOWNLOAD_URL"
 fi
 
+# Проверяем, что архив скачался
 if [ ! -f "$ARCHIVE_PATH" ]; then
     echo "Ошибка: архив не скачался или не сохранился в $ARCHIVE_PATH"
     exit 1
@@ -153,18 +160,23 @@ echo "Размер архива: $(du -h "$ARCHIVE_PATH" | cut -f1)"
 # === Анализ содержимого архива ===
 echo "Анализ содержимого архива..."
 
+# Создаем временную папку для анализа
 TEMP_ANALYSIS="$WORKDIR/analysis_$$"
 mkdir -p "$TEMP_ANALYSIS"
 
+# Распаковываем архив для анализа
 unzip -q -l "$ARCHIVE_PATH" > "$TEMP_ANALYSIS/archive_contents.txt"
 
+# Ищем DEB пакеты разными способами
 echo "Содержимое архива:"
 cat "$TEMP_ANALYSIS/archive_contents.txt"
 
+# Ищем файлы с расширением .deb
 DEB_FILES=$(grep -E "\.deb$" "$TEMP_ANALYSIS/archive_contents.txt" | awk '{print $4}' | grep -v "^$")
 
 if [ -z "$DEB_FILES" ]; then
     echo "Не удалось найти DEB пакеты через анализ списка, пробую альтернативный метод..."
+    # Альтернативный метод - распаковываем и ищем файлы
     unzip -q "$ARCHIVE_PATH" -d "$TEMP_ANALYSIS/extracted"
     DEB_FILES=$(find "$TEMP_ANALYSIS/extracted" -name "*.deb" -type f | head -5)
     
@@ -187,18 +199,24 @@ else
     done
 fi
 
+# Берем первый DEB файл для определения версии
 FIRST_DEB=$(echo "$DEB_FILES" | head -1)
+# Извлекаем только имя файла если это полный путь
 DEB_FILENAME=$(basename "$FIRST_DEB")
 
+# Извлекаем версию из имени файла
 echo "Извлекаю версию из файла: $DEB_FILENAME"
 
+# Пробуем разные шаблоны для извлечения версии
 NEW_VERSION=$(echo "$DEB_FILENAME" | grep -oE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' | head -1)
 
 if [ -z "$NEW_VERSION" ]; then
+    # Альтернативный вариант извлечения версии
     NEW_VERSION=$(echo "$DEB_FILENAME" | sed -E 's/.*([0-9]+[.][0-9]+[.][0-9]+[.][0-9]+).*/\1/' | head -1)
 fi
 
 if [ -z "$NEW_VERSION" ]; then
+    # Еще один вариант для формата 8.3.27-1786
     NEW_VERSION=$(echo "$DEB_FILENAME" | sed -E 's/.*([0-9]+[.][0-9]+[.][0-9]+)-([0-9]+).*/\1.\2/' | head -1)
 fi
 
@@ -212,6 +230,7 @@ fi
 
 echo "Найдена версия для установки: $NEW_VERSION"
 
+# Очищаем временную папку анализа
 rm -rf "$TEMP_ANALYSIS"
 
 # === Упрощенное сравнение версий ===
@@ -219,13 +238,16 @@ echo "Сравниваю версии:"
 echo "   Текущая: $CURRENT_VERSION"
 echo "   Новая:   $NEW_VERSION"
 
+# Если это первая установка, просто продолжаем
 if [ "$IS_FIRST_INSTALL" = true ]; then
     echo "Первая установка, продолжаю..."
 else
+    # Сравниваем версии с помощью sort -V (версионная сортировка)
     HIGHER_VERSION=$(echo -e "$CURRENT_VERSION\n$NEW_VERSION" | sort -V | tail -n1)
     
     if [ "$HIGHER_VERSION" = "$CURRENT_VERSION" ]; then
         echo "Установлена более новая или такая же версия ($CURRENT_VERSION). Обновление не требуется."
+        # Удаляем временный архив если не требуется сохранять
         if [ "$KEEP_ARCHIVE" = false ]; then
             rm -f "$ARCHIVE_PATH"
         fi
@@ -248,6 +270,7 @@ mkdir -p "$PACKAGE_VERSION_DIR"
 echo "Сохраняю пакеты в: $PACKAGE_VERSION_DIR"
 cp -r "$TEMP_EXTRACT"/* "$PACKAGE_VERSION_DIR/" 2>/dev/null || true
 
+# === Переходим в папку с пакетами ===
 cd "$TEMP_EXTRACT"
 
 # === Проверяем наличие DEB пакетов ===
@@ -275,6 +298,7 @@ fi
 # === Устанавливаем пакеты в правильном порядке ===
 echo "Устанавливаю пакеты 1С версии $NEW_VERSION..."
 
+# Функция для установки пакета по шаблону
 install_package_by_pattern() {
     local pattern=$1
     local package=$(find . -name "$pattern" -type f | head -1)
@@ -288,10 +312,12 @@ install_package_by_pattern() {
     fi
 }
 
+# Устанавливаем в правильном порядке
 install_package_by_pattern "1c-enterprise*-common_*_amd64.deb"
 install_package_by_pattern "1c-enterprise*-server_*_amd64.deb"
 install_package_by_pattern "1c-enterprise*-ws_*_amd64.deb"
 
+# Устанавливаем остальные пакеты если есть
 OTHER_PACKAGES=$(find . -name "*.deb" -type f ! -name "*common*" ! -name "*server*" ! -name "*ws*")
 if [ -n "$OTHER_PACKAGES" ]; then
     echo "Устанавливаю дополнительные пакеты:"
@@ -301,6 +327,7 @@ if [ -n "$OTHER_PACKAGES" ]; then
     done
 fi
 
+# === Исправляем зависимости если нужно ===
 echo "Исправление зависимостей..."
 sudo apt-get install -f -y
 
@@ -329,6 +356,7 @@ else
     fi
 fi
 
+# === Проверяем статус службы ===
 echo "Проверка статуса службы..."
 if systemctl is-active "srv1cv8-$NEW_VERSION@default.service" >/dev/null 2>&1; then
     echo "Служба 1С запущена успешно"
@@ -336,10 +364,31 @@ else
     echo "Служба 1С не запущена. Проверьте конфигурацию."
 fi
 
+# === ОТКРЫТИЕ ПОРТОВ В FIREWALL ===
+echo "=== Открытие портов в firewall ==="
+
+# Для ufw (Ubuntu/Debian)
+if command -v ufw >/dev/null 2>&1; then
+    echo "Обнаружен ufw. Открываю порты для 1С..."
+    sudo ufw allow 1540/tcp comment '1C:Enterprise rmngr'
+    sudo ufw allow 1541/tcp comment '1C:Enterprise ragent'
+    sudo ufw allow 1545/tcp comment '1C:Enterprise Cluster Agent'
+    
+    if sudo ufw status | grep -q "Status: active"; then
+        echo "ufw активен. Порты открыты:"
+        sudo ufw status | grep -E "(1540|1541|1545)"
+    else
+        echo "ufw установлен, но не активен. Правила добавлены."
+        echo "Для активации выполните: sudo ufw enable"
+    fi
+fi
+
+# === Очистка временных файлов ===
 echo "Очистка временных файлов..."
 rm -rf "$TEMP_EXTRACT"
 
 if [ "$KEEP_ARCHIVE" = false ]; then
+    # Удаляем архив, но сохраняем распакованные пакеты
     rm -f "$ARCHIVE_PATH"
     echo "Архив удален, пакеты сохранены в: $PACKAGE_VERSION_DIR"
 else
@@ -348,6 +397,7 @@ else
     echo "   Пакеты: $PACKAGE_VERSION_DIR"
 fi
 
+# === Показываем информацию о хранилище ===
 echo ""
 echo "Информация о хранилищах:"
 echo "   Архивы: $ARCHIVE_STORAGE"
