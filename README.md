@@ -6,5 +6,3 @@ chmod +x ./1c.sh
 
 sudo ./1c.sh
 
-# Проверка скрипта
-файл verify.sh
