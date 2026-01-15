@@ -6,3 +6,5 @@ chmod +x ./1c.sh
 
 sudo ./1c.sh
 
+# Для проверки
+check.sh
